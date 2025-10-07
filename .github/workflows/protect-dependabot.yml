@@ -1,0 +1,52 @@
+name: Protect Dependabot Alerts
+
+on:
+  workflow_call:
+    inputs:
+      alert_number:
+        required: true
+        type: number
+    secrets:
+      GCHAT_WEBHOOK_URL:
+        required: true
+
+permissions:
+  contents: read
+  security-events: write   # Needed to reopen alerts
+
+jobs:
+  check-dismissal:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check if user is authorized
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GCHAT_WEBHOOK_URL: ${{ secrets.GCHAT_WEBHOOK_URL }}
+          ALERT_NUMBER: ${{ inputs.alert_number }}
+          ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Define allowed dismissers (team leads / security)
+          LEADS=("lead1" "lead2" "securityperson")
+
+          if [[ ! " ${LEADS[@]} " =~ " ${ACTOR} " ]]; then
+            echo "❌ Unauthorized dismissal by ${ACTOR}"
+
+            # Reopen the alert
+            curl -X PATCH \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              "https://api.github.com/repos/${REPO}/dependabot/alerts/${ALERT_NUMBER}" \
+              -d '{"state":"open"}'
+
+            # Send notification to Google Chat
+            MESSAGE="⚠️ Dependabot alert dismissed by unauthorized user *${ACTOR}* in repo *${REPO}*. Alert reopened."
+            curl -X POST \
+              -H "Content-Type: application/json" \
+              -d "{\"text\": \"${MESSAGE}\"}" \
+              "${GCHAT_WEBHOOK_URL}"
+
+            exit 1
+          else
+            echo "✅ Dismissal authorized by ${ACTOR}"
+          fi
